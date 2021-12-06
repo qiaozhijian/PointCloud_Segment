@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.17)
 project(PointCloud_Segment)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 
 find_package(PCL REQUIRED)
 add_definitions(${PCL_DEFINITIONS})
@@ -9,8 +9,12 @@ add_definitions(${PCL_DEFINITIONS})
 find_package(Boost REQUIRED COMPONENTS regex thread system filesystem)
 add_definitions(-DBOOST_NO_CXX11_SCOPED_ENUMS)
 
+find_package(OpenCV REQUIRED)
+
 include_directories(
         ${Boost_INCLUDE_DIRS}
+        ${OpenCV_INCLUDE_DIRS}
+
 )
 
 include(cmake/global_defination.cmake)
@@ -31,7 +35,10 @@ target_link_libraries(${PROJECT_NAME}
         ${PCL_LIBRARIES}
         ${catkin_LIBRARIES}
         ${Boost_LIBRARIES}
+        ${OpenCV_LIBRARY_DIRS}
         )
+
+file(GLOB_RECURSE ALL_SRC "src/*.cpp")
 
 add_executable(seg_region exec/RegionGrow.cpp)
 target_link_libraries(seg_region ${PROJECT_NAME})
@@ -41,3 +48,6 @@ target_link_libraries(seg_Euclidean ${PROJECT_NAME})
 
 add_executable(EuclideanNormal exec/EuclideanNormal.cpp)
 target_link_libraries(EuclideanNormal ${PROJECT_NAME})
+
+add_executable(AHC_PlaneSeg exec/AHCdemo.cpp ${ALL_SRC})
+target_link_libraries(AHC_PlaneSeg ${PROJECT_NAME} ${OpenCV_LIBRARIES})

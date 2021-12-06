@@ -1,7 +1,7 @@
 #include "planeSeg.h"
 #include <pcl/filters/random_sample.h>
 #include "boost/thread.hpp"
-
+#include <pcl/search/impl/kdtree.hpp>
 PlaneSegment::PlaneSegment(Segment segment, DownSample downsample, bool visualize) {
     _cloud.reset(new pcl::PointCloud<PointType>());
     _cloud->clear();
@@ -135,7 +135,7 @@ void PlaneSegment::Visualize() {
 
 void PlaneSegment::RegionGrowSeg() {
     //设置搜索结构
-    pcl::search::Search<PointType>::Ptr tree = shared_ptr<pcl::search::Search<PointType> >(
+    pcl::search::Search<PointType>::Ptr tree = boost::shared_ptr<pcl::search::Search<PointType> >(
             new pcl::search::KdTree<PointType>);
     //计算点法线
     pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>);

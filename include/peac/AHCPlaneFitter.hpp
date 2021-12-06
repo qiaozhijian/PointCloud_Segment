@@ -36,7 +36,7 @@
 #include <time.h>
 #include <stdlib.h>
 #include <opencv2/opencv.hpp>
-#include "include/LSDextractor.h"
+//#include "include/LSDextractor.h"
 
 //#define DEBUG_CLUSTER
 //#define DEBUG_CALC
@@ -136,7 +136,7 @@ namespace ahc {
 		std::vector<std::pair<int,int>> rfQueue;//for region grow/floodfill, p.first=pixidx, p.second=plid
 		bool drawCoarseBorder;
         cv::Mat mGraphMask;  //获得mGraph
-        std::vector<SurfaceNormal> surfaceNormals;
+//        std::vector<SurfaceNormal> surfaceNormals;
 		//std::vector<PlaneSeg::Stats> blkStats;
 #if defined(DEBUG_INIT) || defined(DEBUG_CLUSTER)
 		std::string saveDir;
