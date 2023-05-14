@@ -16,3 +16,8 @@ make
 # modify the configs in configs/params.yaml
 ./plane_segmentation
 ```
+
+## Results
+Region Growing cannot segment the planes correctly. It's better for clustering.
+
+RANSAC cannot do well, too. Because it just slices the point cloud into several layers.
