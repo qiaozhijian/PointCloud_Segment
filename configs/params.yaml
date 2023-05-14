@@ -1,0 +1,24 @@
+dataset:
+  name: kitti
+  dataset_path: /media/qzj/Document/datasets/KITTI/odometry/data_odometry_velodyne/dataset/sequences
+  split_dir: /home/qzj/code/catkin_gr/src/PC-Feature-BM/configs/data_split/kitti
+  label_dir: "labels"
+  downsample: 1
+
+downsample:
+    method: patchwork # voxelgrid, random, none, patchwork
+    leaf_size: 0.1
+    random_ratio: 0.1
+
+algorithm: ransac # ransac_normal, ransac, region_growing
+normal_neighbor_num: 20
+min_cluster_size: 100
+max_cluster_size: 1000000
+#ransac
+max_iterations: 1000
+distance_threshold: 0.2 # distance_threshold
+
+#region_growing
+normal_consistency: 5.0 # normal_consistency_degree
+curvature_threshold: 0.5 # curvature_threshold
+region_neighbor_num: 30 # number of neighbours to use

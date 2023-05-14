@@ -1,55 +1,59 @@
 #include "planeSeg.h"
 #include <pcl/filters/random_sample.h>
 #include "boost/thread.hpp"
+#include "patchwork/patchwork.hpp"
 
-PlaneSegment::PlaneSegment(Segment segment, DownSample downsample, bool visualize) {
+PlaneSegment::PlaneSegment(bool visualize) {
     _cloud.reset(new pcl::PointCloud<PointType>());
     _cloud->clear();
 
     _cloudDownSample.reset(new pcl::PointCloud<PointType>());
     _cloudDownSample->clear();
 
+    _cloudNormal.reset(new pcl::PointCloud<pcl::Normal>());
+    _cloudNormal->clear();
+
     _colored_cloud.reset(new pcl::PointCloud<pcl::PointXYZRGB>());
     _colored_cloud->clear();
-
-    _segment = segment;
-    _downsample = downsample;
 
     _bVisual = visualize;
 }
 
 
-void PlaneSegment::ReadData(std::string &in_file) {
-
-    if (pcl::io::loadPCDFile<PointType>(in_file, *_cloud) == -1) {
-        cerr << ("Couldn't read file " + in_file + " \n");
-    }
-
-}
-
-
 void PlaneSegment::VoxelDownSample() {
-    if (_downsample.type == Voxel) {
+    if (config::downsample_method == "voxelgrid") {
         pcl::VoxelGrid<PointType> vg;
         cout << "before filtering, point cloud->size: " << _cloud->points.size() << endl;
         vg.setInputCloud(_cloud);
-        vg.setLeafSize(_downsample.voxelSize, _downsample.voxelSize, _downsample.voxelSize);
+        vg.setLeafSize(config::leaf_size, config::leaf_size, config::leaf_size);
         vg.filter(*_cloudDownSample);
         cout << "After filtering, point cloud->size: " << _cloudDownSample->points.size() << endl;
-    } else if (_downsample.type == Random) {
+    } else if (config::downsample_method == "random") {
         pcl::RandomSample<PointType> rs;
         cout << "before filtering, point cloud->size: " << _cloud->points.size() << endl;
         rs.setInputCloud(_cloud);
-        int num = (int) (_cloud->points.size() * _downsample.randomRate);
+        int num = (int) (_cloud->points.size() * config::random_ratio);
         rs.setSample(num);
         rs.filter(*_cloudDownSample);
         cout << "After filtering, point cloud->size: " << _cloudDownSample->points.size() << endl;
-    } else if (_downsample.type == NoneDS) {
+    } else if (config::downsample_method == "none") {
         _cloudDownSample = _cloud;
+    } else if (config::downsample_method == "patchwork"){
+        pcl::PointCloud<pcl::PointXYZI>::Ptr ptrCloudI(new pcl::PointCloud<pcl::PointXYZI>);
+        pcl::copyPointCloud(*_cloud, *ptrCloudI);
+        pcl::PointCloud<pcl::PointXYZI> srcGround;
+        pcl::PointCloud<pcl::PointXYZI>::Ptr ptrSrcNonground(new pcl::PointCloud<pcl::PointXYZI>);
+        double tSrc = 0.0;
+        PatchWork<pcl::PointXYZI> patchwork("KITTI");
+        patchwork.estimate_ground(*ptrCloudI, srcGround, *ptrSrcNonground, tSrc);
+        pcl::copyPointCloud(*ptrSrcNonground, *_cloudDownSample);
+    } else {
+        cerr << "Wrong downsample method!" << endl;
+        exit(1);
     }
 }
 
-void PlaneSegment::SegOnePlane(const PointCloudPtr &cloudIn, PointCloudPtr &cloudLeave, PointCloudPtr &cloudPlane) {
+void PlaneSegment::SegOnePlane(PointCloudPtr &cloudIn, PointCloudPtr &cloudPlane) {
     // Euclidean Segment
     pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
     pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
@@ -58,9 +62,9 @@ void PlaneSegment::SegOnePlane(const PointCloudPtr &cloudIn, PointCloudPtr &clou
     seg.setOptimizeCoefficients(true);
     seg.setModelType(pcl::SACMODEL_PLANE);
     seg.setMethodType(pcl::SAC_RANSAC);
-    seg.setMaxIterations(_segment.maxIters);
-//    查询点到目标模型的距离阈值（如果大于此阈值，则查询点不在目标模型上，默认值为0）
-    seg.setDistanceThreshold(_segment.disTh);        //阀值
+    seg.setMaxIterations(config::max_iteration);
+    //    查询点到目标模型的距离阈值（如果大于此阈值，则查询点不在目标模型上，默认值为0）
+    seg.setDistanceThreshold(config::distance_threshold);        //阀值
     // 从剩余点云中再分割出当前最大平面分量
     seg.setInputCloud(cloudIn);
     seg.segment(*inliers, *coefficients);
@@ -80,8 +84,7 @@ void PlaneSegment::SegOnePlane(const PointCloudPtr &cloudIn, PointCloudPtr &clou
 
     // 过滤平面点，得到剩余点云
     extract.setNegative(true);
-    cloudLeave->clear();
-    extract.filter(*cloudLeave);
+    extract.filter(*cloudIn);
 
 }
 
@@ -90,15 +93,11 @@ void PlaneSegment::EuclideanSegment() {
     int nr_points = _cloudDownSample->points.size();  //降采样后剩余点云数量
     int r, g, b;
 
-    PointCloudPtr cloudToSeg(new pcl::PointCloud<PointType>);
     PointCloudPtr cloud_plane(new pcl::PointCloud<PointType>);
-    PointCloudPtr cloudLeave(new pcl::PointCloud<PointType>);
-    pcl::copyPointCloud(*_cloudDownSample, *cloudToSeg);
     int planes = 0;
-    while (cloud_plane->size() > 0.03 * nr_points or planes == 0)  //现：提取的当前平面点数>阈值
+    while (cloud_plane->size() > config::min_cluster_size or planes == 0)  //现：提取的当前平面点数>阈值
     {
-        SegOnePlane(cloudToSeg, cloudLeave, cloud_plane);
-        pcl::copyPointCloud(*cloudLeave, *cloudToSeg);
+        SegOnePlane(_cloudDownSample, cloud_plane);
         planes++;
 
         if (!_bVisual)
@@ -135,26 +134,18 @@ void PlaneSegment::Visualize() {
 
 void PlaneSegment::RegionGrowSeg() {
     //设置搜索结构
-    pcl::search::Search<PointType>::Ptr tree = shared_ptr<pcl::search::Search<PointType> >(
+    pcl::search::Search<PointType>::Ptr tree = boost::shared_ptr<pcl::search::Search<PointType>>(
             new pcl::search::KdTree<PointType>);
-    //计算点法线
-    pcl::PointCloud<pcl::Normal>::Ptr normals(new pcl::PointCloud<pcl::Normal>);
-    pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> normal_estimator;
-    normal_estimator.setSearchMethod(tree);
-    normal_estimator.setInputCloud(_cloudDownSample);
-    normal_estimator.setKSearch(_segment.normalK);       //法向量估计的k近邻数目
-    normal_estimator.compute(*normals);
-
     //聚类对象<点，法线>
     pcl::RegionGrowing<pcl::PointXYZ, pcl::Normal> reg;
-    reg.setMinClusterSize(100);         //最小聚类点数
-    reg.setMaxClusterSize(1000000);    //最大
+    reg.setMinClusterSize(config::min_cluster_size);         //最小聚类点数
+    reg.setMaxClusterSize(config::max_cluster_size);    //最大
     reg.setSearchMethod(tree);
-    reg.setNumberOfNeighbours(_segment.regionK);     //邻域点个数，决定这是一个平面(决定容错率，设置大时有倾斜也可接受，设置小时检测到的平面会很小）
+    reg.setNumberOfNeighbours(config::region_neighbor_num);     //邻域点个数，决定这是一个平面(决定容错率，设置大时有倾斜也可接受，设置小时检测到的平面会很小）
     reg.setInputCloud(_cloudDownSample);
-    reg.setInputNormals(normals);
-    reg.setSmoothnessThreshold(_segment.smoTh);    //平滑阈值_两法线偏差允许范围，若小于该阈值则认为两点属于同一聚类
-    reg.setCurvatureThreshold(_segment.curTh);                    //曲率阀值_两点曲率偏差允许范围，若满足前一条件并小于该阈值则采用新增加点迭代进行区域生长
+    reg.setInputNormals(_cloudNormal);
+    reg.setSmoothnessThreshold(config::normal_consistency);    //平滑阈值_两法线偏差允许范围，若小于该阈值则认为两点属于同一聚类
+    reg.setCurvatureThreshold(config::curvature_threshold);                    //曲率阀值_两点曲率偏差允许范围，若满足前一条件并小于该阈值则采用新增加点迭代进行区域生长
 
     std::vector<pcl::PointIndices> clusters;
     reg.extract(clusters);
@@ -164,8 +155,7 @@ void PlaneSegment::RegionGrowSeg() {
 }
 
 
-void PlaneSegment::SegOnePlaneWithNormal(const PointCloudPtr &cloudIn, const pcl::PointCloud<pcl::Normal>::Ptr nomalIn,
-                                         PointCloudPtr &cloudLeave, pcl::PointCloud<pcl::Normal>::Ptr nomalLeave,
+void PlaneSegment::SegOnePlaneWithNormal(PointCloudPtr &cloudIn, pcl::PointCloud<pcl::Normal>::Ptr nomalIn,
                                          PointCloudPtr &cloudPlane, pcl::PointCloud<pcl::Normal>::Ptr nomalPlane) {
 
     // ****************为平面模型创建分割对象并设置所有参数
@@ -177,8 +167,8 @@ void PlaneSegment::SegOnePlaneWithNormal(const PointCloudPtr &cloudIn, const pcl
     seg.setMethodType(pcl::SAC_RANSAC);//设置随机采样一致性方法类型
     seg.setNormalDistanceWeight(0.1);  // 法线信息权重
     seg.setMethodType(pcl::SAC_RANSAC);//随机采样一致性算法
-    seg.setMaxIterations(_segment.maxIters);         //最大迭代次数
-    seg.setDistanceThreshold(_segment.disTh);    //设置内点到模型的距离允许最大值
+    seg.setMaxIterations(config::max_iteration);         //最大迭代次数
+    seg.setDistanceThreshold(config::distance_threshold);    //设置内点到模型的距离允许最大值
     seg.setInputCloud(cloudIn); //输入点云
     seg.setInputNormals(nomalIn);//设置输人点云的法线，normals为指向法线的指针。
     seg.segment(*inliers_plane, *coefficients_plane);//存储分割结果到点几何inliers_plane及存储平面模型的系数coefficients_plane
@@ -190,7 +180,7 @@ void PlaneSegment::SegOnePlaneWithNormal(const PointCloudPtr &cloudIn, const pcl
     extract.setNegative(false);//设置提取点内而非点外。
     extract.filter(*cloudPlane);// 存储分割得到的平面上的点到点云文件
     extract.setNegative(true);//设置提取点外而非点内。
-    extract.filter(*cloudLeave);//提取输出并储存到cloudLeavex
+    extract.filter(*cloudIn);//提取输出并储存到cloudLeavex
 
     // ************Remove the planar inliers, extract the rest
     pcl::ExtractIndices<pcl::Normal> extract_normals;    //点提取对象
@@ -199,42 +189,19 @@ void PlaneSegment::SegOnePlaneWithNormal(const PointCloudPtr &cloudIn, const pcl
     extract_normals.setNegative(false);
     extract_normals.filter(*nomalPlane);
     extract_normals.setNegative(true);
-    extract_normals.filter(*nomalLeave);
+    extract_normals.filter(*nomalIn);
 
 }
 
 void PlaneSegment::EuclideanNormalSeg() {
 
-    int nr_points = _cloudDownSample->points.size();  //降采样后剩余点云数量
     int r, g, b;
-
-    PointCloudPtr cloudToSeg(new pcl::PointCloud<PointType>);
-    pcl::PointCloud<pcl::Normal>::Ptr nomalToSeg(new pcl::PointCloud<pcl::Normal>);
     PointCloudPtr cloud_plane(new pcl::PointCloud<PointType>);
     pcl::PointCloud<pcl::Normal>::Ptr nomalPlane(new pcl::PointCloud<pcl::Normal>);
-    PointCloudPtr cloudLeave(new pcl::PointCloud<PointType>);
-    pcl::PointCloud<pcl::Normal>::Ptr nomalLeave(new pcl::PointCloud<pcl::Normal>);
-
-    pcl::copyPointCloud(*_cloudDownSample, *cloudToSeg);
-
-    clock_t startTime, endTime;
-    startTime = clock();
-    // ************点云进行法线估计，为后续进行基于法线的分割准备数据
-    pcl::NormalEstimation<PointType, pcl::Normal> ne;  //法线估计对象
-    pcl::search::KdTree<PointType>::Ptr tree(new pcl::search::KdTree<PointType>());
-    ne.setSearchMethod(tree);//设置内部算法实现时所用的搜索对象，tree为指向kdtree或者octree对应的指针
-    ne.setInputCloud(cloudToSeg);
-    ne.setKSearch(_segment.normalK);// 设置K近邻搜索时所用的K参数
-    ne.compute(*nomalToSeg);//计算特征值
-    endTime = clock();
-    cout << "The NormalEstimation time is:" << (double) (endTime - startTime) / CLOCKS_PER_SEC << "s" << endl;
-
     int planes = 0;
-    while (cloud_plane->size() > 0.03 * nr_points or planes == 0)  //现：提取的当前平面点数>阈值
+    while (cloud_plane->size() > config::min_cluster_size or planes == 0)  //现：提取的当前平面点数>阈值
     {
-        SegOnePlaneWithNormal(cloudToSeg, nomalToSeg, cloudLeave, nomalLeave, cloud_plane, nomalPlane);
-        pcl::copyPointCloud(*cloudLeave, *cloudToSeg);
-        pcl::copyPointCloud(*nomalLeave, *nomalToSeg);
+        SegOnePlaneWithNormal(_cloudDownSample, _cloudNormal, cloud_plane, nomalPlane);
         planes++;
 
         if (!_bVisual)
@@ -254,9 +221,29 @@ void PlaneSegment::EuclideanNormalSeg() {
             _colored_cloud->points.push_back(point);
         }
     }
+    LOG(INFO) << "The number of planes is " << planes << endl;
 }
 
-void PlaneSegment::SegmentPlanes() {
+void PlaneSegment::EstimateNormal() {
+    clock_t startTime, endTime;
+    startTime = clock();
+    // ************点云进行法线估计，为后续进行基于法线的分割准备数据
+    pcl::NormalEstimation<PointType, pcl::Normal> ne;  //法线估计对象
+    pcl::search::KdTree<PointType>::Ptr tree(new pcl::search::KdTree<PointType>());
+    ne.setSearchMethod(tree);//设置内部算法实现时所用的搜索对象，tree为指向kdtree或者octree对应的指针
+    ne.setInputCloud(_cloudDownSample);
+    ne.setKSearch(config::normal_neighbor_num);// 设置K近邻搜索时所用的K参数
+    ne.compute(*_cloudNormal);//计算特征值
+    endTime = clock();
+    cout << "The NormalEstimation time is:" << (double) (endTime - startTime) / CLOCKS_PER_SEC << "s" << endl;
+}
+
+void PlaneSegment::ReadData(std::string &in_file) {
+
+    if (pcl::io::loadPCDFile<PointType>(in_file, *_cloud) == -1) {
+        cerr << ("Couldn't read file " + in_file + " \n");
+    }
+    _cloud = kitti_loader::GetCloud(in_file);
 
     clock_t startTime_ds, endTime_ds;
     startTime_ds = clock();
@@ -264,42 +251,27 @@ void PlaneSegment::SegmentPlanes() {
     endTime_ds = clock();
     cout << "The downsample time is:" << (double) (endTime_ds - startTime_ds) / CLOCKS_PER_SEC << "s" << endl;
 
+    if (config::algorithm == "ransac_normal" or config::algorithm == "region_growing") {
+        EstimateNormal();
+    }
+}
+
+void PlaneSegment::SegmentPlanes() {
+
     clock_t startTime, endTime;
     startTime = clock();
-    if (_segment.type == Euclidean) {
+    if (config::algorithm == "ransac") {
         EuclideanSegment();
-    } else if (_segment.type == RegionGrow) {
-        RegionGrowSeg();
-    } else if (_segment.type == Euclidean_Normal) {
+    } else if (config::algorithm == "ransac_normal") {
         EuclideanNormalSeg();
+    } else if (config::algorithm == "region_growing") {
+        RegionGrowSeg();
+    } else {
+        cerr << "Wrong algorithm name!" << endl;
     }
     endTime = clock();
+    cout << "The run time is:" << (double) (endTime - startTime) / CLOCKS_PER_SEC << "s" << endl;
 
     if (_bVisual)
         Visualize();
-
-    switch (_segment.type) {
-        case Euclidean:
-            cout << "segment type: Euclidean. " << endl;
-            break;
-        case RegionGrow:
-            cout << "segment type: RegionGrow. " << endl;
-            break;
-        case Euclidean_Normal:
-            cout << "segment type: Euclidean_Normal. " << endl;
-            break;
-    }
-
-    switch (_downsample.type) {
-        case Random:
-            cout << "downsample type: Random, ";
-            cout << "random num: " << _downsample.randomRate << " " << endl;
-            break;
-        case Voxel:
-            cout << "downsample type: Voxel, ";
-            cout << "voxelsize: " << _downsample.voxelSize << " " << endl;
-            break;
-    }
-
-    cout << "The run time is:" << (double) (endTime - startTime) / CLOCKS_PER_SEC << "s" << endl;
 }
