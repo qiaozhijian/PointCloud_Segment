@@ -14,6 +14,7 @@ cd build
 cmake ..
 make
 # modify the configs in configs/params.yaml
+# default data is from KITTI dataset
 ./plane_segmentation
 ```
 
